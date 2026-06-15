@@ -206,12 +206,21 @@ function render() {
     const wazeUrl = `https://waze.com/ul?ll=${m.latitude},${m.longitude}&navigate=yes`;
     const gmapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${m.latitude},${m.longitude}`;
 
-    // Build a badge + discount line per distinct entry (type)
-    const badges = m._entries.map(e => {
-      const groupKey = typeGroup(e.type);
-      const groupLabel = TYPE_GROUPS[groupKey] || TYPE_GROUPS.S;
-      return `<span class="badge badge-${groupKey}">${groupLabel}</span>`;
-    }).join('');
+    // Build one badge per distinct type group (avoid duplicate badges
+    // when multiple entries share the same card type, e.g. two C0/C1 deals)
+    const seenGroups = new Set();
+    const badges = m._entries
+      .filter(e => {
+        const groupKey = typeGroup(e.type);
+        if (seenGroups.has(groupKey)) return false;
+        seenGroups.add(groupKey);
+        return true;
+      })
+      .map(e => {
+        const groupKey = typeGroup(e.type);
+        const groupLabel = TYPE_GROUPS[groupKey] || TYPE_GROUPS.S;
+        return `<span class="badge badge-${groupKey}">${groupLabel}</span>`;
+      }).join('');
 
     const discountLines = m._entries
       .filter(e => e.discount)
