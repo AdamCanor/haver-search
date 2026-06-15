@@ -170,41 +170,71 @@ function render() {
     return true;
   });
 
+  // Group entries with the same title + same location into one card
+  const groups = new Map();
+  filtered.forEach(m => {
+    const key = m.title + '|' + m.latitude + '|' + m.longitude;
+    if (!groups.has(key)) {
+      groups.set(key, { ...m, _entries: [m] });
+    } else {
+      groups.get(key)._entries.push(m);
+    }
+  });
+  let grouped = Array.from(groups.values());
+
   if (userPos) {
-    filtered.forEach(m => {
+    grouped.forEach(m => {
       m._dist = haversine(userPos.lat, userPos.lng, m.latitude, m.longitude);
     });
   }
 
   if (sortBy === 'distance' && userPos) {
-    filtered.sort((a, b) => a._dist - b._dist);
+    grouped.sort((a, b) => a._dist - b._dist);
   } else {
-    filtered.sort((a, b) => a.title.localeCompare(b.title, 'he'));
+    grouped.sort((a, b) => a.title.localeCompare(b.title, 'he'));
   }
 
-  if (filtered.length === 0) {
+  if (grouped.length === 0) {
     listEl.innerHTML = '<div class="status">לא נמצאו תוצאות</div>';
     loadMoreWrap.style.display = 'none';
     return;
   }
 
-  const toShow = filtered.slice(0, visibleCount);
+  const toShow = grouped.slice(0, visibleCount);
   listEl.innerHTML = toShow.map(m => {
-    const groupKey = typeGroup(m.type);
-    const groupLabel = TYPE_GROUPS[groupKey] || TYPE_GROUPS.S;
     const distText = m._dist !== undefined ? m._dist.toFixed(1) + ' ק"מ' : '';
     const wazeUrl = `https://waze.com/ul?ll=${m.latitude},${m.longitude}&navigate=yes`;
     const gmapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${m.latitude},${m.longitude}`;
+
+    // Build a badge + discount line per distinct entry (type)
+    const badges = m._entries.map(e => {
+      const groupKey = typeGroup(e.type);
+      const groupLabel = TYPE_GROUPS[groupKey] || TYPE_GROUPS.S;
+      return `<span class="badge badge-${groupKey}">${groupLabel}</span>`;
+    }).join('');
+
+    const discountLines = m._entries
+      .filter(e => e.discount)
+      .map(e => {
+        const groupKey = typeGroup(e.type);
+        const groupLabel = TYPE_GROUPS[groupKey] || TYPE_GROUPS.S;
+        return `${escapeHtml(groupLabel)}: ${escapeHtml(e.discount)} הנחה`;
+      });
+
+    const subLine = m._entries.length > 1
+      ? discountLines.join(' · ')
+      : (m.category ? escapeHtml(m.category) + (m.discount ? ' · ' + escapeHtml(m.discount) + ' הנחה' : '') : '');
+
     return `
       <div class="card">
         <div class="card-top">
           <div style="flex:1; min-width:0;">
             <p class="card-title">${escapeHtml(m.title)}</p>
-            <p class="card-sub">${escapeHtml(m.category)}${m.discount ? ' · ' + escapeHtml(m.discount) + ' הנחה' : ''}</p>
+            <p class="card-sub">${subLine}</p>
             <p class="card-sub">${escapeHtml(m.city)}${m.address ? ', ' + escapeHtml(m.address) : ''}</p>
           </div>
           <div class="meta-col">
-            <span class="badge badge-${groupKey}">${groupLabel}</span>
+            <div style="display:flex; gap:4px; flex-wrap:wrap; justify-content:flex-end;">${badges}</div>
             ${distText ? `<span class="dist">${distText}</span>` : ''}
           </div>
         </div>
@@ -216,7 +246,7 @@ function render() {
     `;
   }).join('');
 
-  loadMoreWrap.style.display = filtered.length > visibleCount ? 'block' : 'none';
+  loadMoreWrap.style.display = grouped.length > visibleCount ? 'block' : 'none';
 }
 
 function escapeHtml(str) {
