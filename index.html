@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+<title>חבר - חיפוש בתי עסק</title>
+<link rel="manifest" href="manifest.json" />
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    margin: 0;
+    padding: 12px;
+    background: #f5f5f4;
+    color: #1a1a1a;
+    max-width: 480px;
+    margin: 0 auto;
+  }
+  input, select, button {
+    font-size: 15px;
+    padding: 10px 12px;
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    background: #fff;
+    width: 100%;
+  }
+  button {
+    cursor: pointer;
+    font-weight: 500;
+  }
+  button:active { transform: scale(0.98); }
+  .controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .status { text-align: center; color: #777; font-size: 13px; padding: 2rem 0; }
+  .card {
+    background: #fff;
+    border: 1px solid #e3e3e0;
+    border-radius: 12px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+  }
+  .card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .card-title { font-weight: 500; font-size: 15px; margin: 0 0 2px; }
+  .card-sub { font-size: 13px; color: #777; margin: 0; }
+  .badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    white-space: nowrap;
+  }
+  .badge-F { background: #FAEEDA; color: #633806; }
+  .badge-G { background: #EAF3DE; color: #27500A; }
+  .badge-C { background: #F1EFE8; color: #444441; }
+  .badge-S { background: #FBEAF0; color: #72243E; }
+  .dist { font-size: 12px; font-weight: 500; margin-top: 4px; }
+  .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .actions a {
+    flex: 1;
+    text-align: center;
+    font-size: 13px;
+    padding: 6px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    text-decoration: none;
+    color: #1a1a1a;
+  }
+  .meta-col { display: flex; flex-direction: column; align-items: center; gap: 2px; flex-shrink: 0; }
+  #loadMoreWrap { margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <input id="search" type="text" placeholder="חיפוש לפי שם" />
+  <div class="row2">
+    <select id="typeFilter">
+      <option value="all">כל הסוגים</option>
+      <option value="F">חבר טעמים</option>
+      <option value="G">חבר נטען</option>
+      <option value="C">חבר אשראי</option>
+      <option value="S">תרבות ופנאי</option>
+    </select>
+    <select id="sortBy">
+      <option value="distance">מיון: מרחק</option>
+      <option value="name">מיון: שם</option>
+    </select>
+  </div>
+  <button id="locBtn"><span id="locBtnText">אתר את מיקומי</span></button>
+</div>
+
+<div id="status" class="status">טוען נתונים...</div>
+<div id="list"></div>
+<div id="loadMoreWrap" style="display:none;">
+  <button id="loadMoreBtn">הצג עוד</button>
+</div>
+
+<script>
+const PROXY_URL = "https://um005djquk.execute-api.il-central-1.amazonaws.com/";
+const CACHE_KEY = "hever-markers-cache";
+const CACHE_TTL = 30 * 60 * 1000;
+
+const TYPE_GROUPS = {
+  F: "חבר טעמים",
+  G: "חבר נטען",
+  C: "חבר אשראי",
+  S: "תרבות ופנאי"
+};
+
+let allMarkers = [];
+let userPos = null;
+let visibleCount = 20;
+const PAGE_SIZE = 20;
+
+const statusEl = document.getElementById('status');
+const listEl = document.getElementById('list');
+const searchEl = document.getElementById('search');
+const typeFilterEl = document.getElementById('typeFilter');
+const sortByEl = document.getElementById('sortBy');
+const locBtn = document.getElementById('locBtn');
+const locBtnText = document.getElementById('locBtnText');
+const loadMoreWrap = document.getElementById('loadMoreWrap');
+const loadMoreBtn = document.getElementById('loadMoreBtn');
+
+function typeGroup(type) {
+  return type.charAt(0);
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+async function loadData() {
+  try {
+    const cached = localStorage.getItem(CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      if (Date.now() - parsed.ts < CACHE_TTL) {
+        allMarkers = parsed.markers;
+        statusEl.style.display = 'none';
+        render();
+        return;
+      }
+    }
+
+    const res = await fetch(PROXY_URL);
+    if (!res.ok) throw new Error('bad response');
+    const outer = await res.json();
+    const data = typeof outer === 'string' ? JSON.parse(outer) : outer;
+    allMarkers = data;
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), markers: data }));
+    statusEl.style.display = 'none';
+    render();
+  } catch (e) {
+    statusEl.textContent = "שגיאה בטעינת הנתונים. נסה לרענן.";
+  }
+}
+
+function render() {
+  const search = searchEl.value.trim().toLowerCase();
+  const typeFilter = typeFilterEl.value;
+  const sortBy = sortByEl.value;
+
+  let filtered = allMarkers.filter(m => {
+    if (typeFilter !== 'all' && typeGroup(m.type) !== typeFilter) return false;
+    if (search && !m.title.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  if (userPos) {
+    filtered.forEach(m => {
+      m._dist = haversine(userPos.lat, userPos.lng, m.latitude, m.longitude);
+    });
+  }
+
+  if (sortBy === 'distance' && userPos) {
+    filtered.sort((a, b) => a._dist - b._dist);
+  } else {
+    filtered.sort((a, b) => a.title.localeCompare(b.title, 'he'));
+  }
+
+  if (filtered.length === 0) {
+    listEl.innerHTML = '<div class="status">לא נמצאו תוצאות</div>';
+    loadMoreWrap.style.display = 'none';
+    return;
+  }
+
+  const toShow = filtered.slice(0, visibleCount);
+  listEl.innerHTML = toShow.map(m => {
+    const groupKey = typeGroup(m.type);
+    const groupLabel = TYPE_GROUPS[groupKey] || TYPE_GROUPS.S;
+    const distText = m._dist !== undefined ? m._dist.toFixed(1) + ' ק"מ' : '';
+    const wazeUrl = `https://waze.com/ul?ll=${m.latitude},${m.longitude}&navigate=yes`;
+    const gmapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${m.latitude},${m.longitude}`;
+    return `
+      <div class="card">
+        <div class="card-top">
+          <div style="flex:1; min-width:0;">
+            <p class="card-title">${escapeHtml(m.title)}</p>
+            <p class="card-sub">${escapeHtml(m.category)}${m.discount ? ' · ' + escapeHtml(m.discount) + ' הנחה' : ''}</p>
+            <p class="card-sub">${escapeHtml(m.city)}${m.address ? ', ' + escapeHtml(m.address) : ''}</p>
+          </div>
+          <div class="meta-col">
+            <span class="badge badge-${groupKey}">${groupLabel}</span>
+            ${distText ? `<span class="dist">${distText}</span>` : ''}
+          </div>
+        </div>
+        <div class="actions">
+          <a href="${gmapsUrl}" target="_blank" rel="noopener">הוראות הגעה</a>
+          <a href="${wazeUrl}" target="_blank" rel="noopener">Waze</a>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  loadMoreWrap.style.display = filtered.length > visibleCount ? 'block' : 'none';
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+searchEl.addEventListener('input', () => { visibleCount = PAGE_SIZE; render(); });
+typeFilterEl.addEventListener('change', () => { visibleCount = PAGE_SIZE; render(); });
+sortByEl.addEventListener('change', () => { visibleCount = PAGE_SIZE; render(); });
+loadMoreBtn.addEventListener('click', () => { visibleCount += PAGE_SIZE; render(); });
+
+locBtn.addEventListener('click', () => {
+  if (!navigator.geolocation) {
+    locBtnText.textContent = "מיקום לא נתמך";
+    return;
+  }
+  locBtnText.textContent = "מאתר...";
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      userPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      locBtnText.textContent = "מיקום אותר";
+      sortByEl.value = 'distance';
+      visibleCount = PAGE_SIZE;
+      render();
+    },
+    () => {
+      locBtnText.textContent = "לא ניתן לאתר מיקום";
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+});
+
+loadData();
+</script>
+</body>
+</html>
