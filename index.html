@@ -142,6 +142,7 @@ async function loadData() {
         allMarkers = parsed.markers;
         statusEl.style.display = 'none';
         render();
+        autoGeolocate();
         return;
       }
     }
@@ -154,6 +155,7 @@ async function loadData() {
     localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), markers: data }));
     statusEl.style.display = 'none';
     render();
+    autoGeolocate();
   } catch (e) {
     statusEl.textContent = "שגיאה בטעינת הנתונים. נסה לרענן.";
   }
@@ -222,17 +224,17 @@ function render() {
         return `<span class="badge badge-${groupKey}">${groupLabel}</span>`;
       }).join('');
 
+    // Only show discount for credit card (C) entries, dedupe by group
+    const seenDiscountGroups = new Set();
     const discountLines = m._entries
-      .filter(e => e.discount)
-      .map(e => {
-        const groupKey = typeGroup(e.type);
-        const groupLabel = TYPE_GROUPS[groupKey] || TYPE_GROUPS.S;
-        return `${escapeHtml(groupLabel)}: ${escapeHtml(e.discount)} הנחה`;
-      });
+      .filter(e => typeGroup(e.type) === 'C' && e.discount && !seenDiscountGroups.has('C') && (seenDiscountGroups.add('C') || true))
+      .map(e => `${escapeHtml(e.discount)} הנחה`);
 
-    const subLine = m._entries.length > 1
-      ? discountLines.join(' · ')
-      : (m.category ? escapeHtml(m.category) + (m.discount ? ' · ' + escapeHtml(m.discount) + ' הנחה' : '') : '');
+    const distinctTypes = new Set(m._entries.map(e => typeGroup(e.type)));
+    const singleEntry = m._entries[0];
+    const subLine = distinctTypes.size > 1
+      ? (discountLines.length ? discountLines.join(' · ') : '')
+      : (escapeHtml(singleEntry.category) + (typeGroup(singleEntry.type) === 'C' && singleEntry.discount ? ' · ' + escapeHtml(singleEntry.discount) + ' הנחה' : ''));
 
     return `
       <div class="card">
@@ -269,6 +271,21 @@ searchEl.addEventListener('input', () => { visibleCount = PAGE_SIZE; render(); }
 typeFilterEl.addEventListener('change', () => { visibleCount = PAGE_SIZE; render(); });
 sortByEl.addEventListener('change', () => { visibleCount = PAGE_SIZE; render(); });
 loadMoreBtn.addEventListener('click', () => { visibleCount += PAGE_SIZE; render(); });
+
+function autoGeolocate() {
+  if (!navigator.geolocation || userPos) return;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      userPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      locBtnText.textContent = 'מיקום אותר';
+      sortByEl.value = 'distance';
+      visibleCount = PAGE_SIZE;
+      render();
+    },
+    () => {}, // silent fail — user can still press the button manually
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
 
 locBtn.addEventListener('click', () => {
   if (!navigator.geolocation) {
