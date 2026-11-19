@@ -29,6 +29,7 @@
     font-weight: 500;
   }
   button:active { transform: scale(0.98); }
+  button:disabled { opacity: 0.5; cursor: default; }
   .controls { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
   .status { text-align: center; color: #777; font-size: 13px; padding: 2rem 0; }
@@ -85,7 +86,10 @@
       <option value="name">מיון: שם</option>
     </select>
   </div>
-  <button id="locBtn"><span id="locBtnText">אתר את מיקומי</span></button>
+  <div class="row2">
+    <button id="locBtn"><span id="locBtnText">אתר את מיקומי</span></button>
+    <button id="exportBtn" disabled>הורדת הרשימה</button>
+  </div>
 </div>
 
 <div id="status" class="status">טוען נתונים...</div>
@@ -120,6 +124,7 @@ const locBtn = document.getElementById('locBtn');
 const locBtnText = document.getElementById('locBtnText');
 const loadMoreWrap = document.getElementById('loadMoreWrap');
 const loadMoreBtn = document.getElementById('loadMoreBtn');
+const exportBtn = document.getElementById('exportBtn');
 
 function typeGroup(type) {
   return type.charAt(0);
@@ -161,7 +166,7 @@ async function loadData() {
   }
 }
 
-function render() {
+function getGrouped() {
   const search = searchEl.value.trim().toLowerCase();
   const typeFilter = typeFilterEl.value;
   const sortBy = sortByEl.value;
@@ -195,6 +200,12 @@ function render() {
   } else {
     grouped.sort((a, b) => a.title.localeCompare(b.title, 'he'));
   }
+  return grouped;
+}
+
+function render() {
+  const grouped = getGrouped();
+  exportBtn.disabled = grouped.length === 0;
 
   if (grouped.length === 0) {
     listEl.innerHTML = '<div class="status">לא נמצאו תוצאות</div>';
@@ -260,6 +271,63 @@ function render() {
   loadMoreWrap.style.display = grouped.length > visibleCount ? 'block' : 'none';
 }
 
+function buildExportText(grouped) {
+  const typeFilter = typeFilterEl.value;
+  const search = searchEl.value.trim();
+  const header = [
+    'רשימת בתי עסק - חבר',
+    'סוג: ' + (typeFilter === 'all' ? 'כל הסוגים' : TYPE_GROUPS[typeFilter]),
+    search ? 'חיפוש: ' + search : null,
+    'סה"כ: ' + grouped.length + ' בתי עסק',
+    'תאריך: ' + new Date().toLocaleDateString('he-IL'),
+  ].filter(Boolean).join('\n');
+
+  const lines = grouped.map((m, i) => {
+    const groups = [...new Set(m._entries.map(e => typeGroup(e.type)))];
+    const typesLabel = groups.map(g => TYPE_GROUPS[g] || TYPE_GROUPS.S).join(', ');
+    const discount = m._entries.find(e => typeGroup(e.type) === 'C' && e.discount)?.discount;
+    const details = [m.category, discount ? discount + ' הנחה' : null].filter(Boolean).join(' · ');
+    const place = [m.city, m.address].filter(Boolean).join(', ');
+    return [
+      `${i + 1}. ${m.title}`,
+      typesLabel,
+      details || null,
+      place || null,
+      m._dist !== undefined ? m._dist.toFixed(1) + ' ק"מ ממך' : null,
+    ].filter(Boolean).join('\n');
+  });
+
+  return header + '\n\n' + lines.join('\n\n') + '\n';
+}
+
+async function exportList() {
+  const grouped = getGrouped();
+  if (!grouped.length) return;
+  // BOM so Hebrew renders correctly in Android/Windows text viewers
+  const text = '\uFEFF' + buildExportText(grouped);
+  const FILE_SLUGS = { all: 'all', F: 'teamim', G: 'nitan', C: 'ashrai', S: 'tarbut' };
+  const filename = `hever-${FILE_SLUGS[typeFilterEl.value]}.txt`;
+  const file = new File([text], filename, { type: 'text/plain' });
+
+  // On phones: open the native share sheet (WhatsApp etc.). Otherwise: download.
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: filename });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  const url = URL.createObjectURL(file);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   const div = document.createElement('div');
@@ -270,6 +338,7 @@ function escapeHtml(str) {
 searchEl.addEventListener('input', () => { visibleCount = PAGE_SIZE; render(); });
 typeFilterEl.addEventListener('change', () => { visibleCount = PAGE_SIZE; render(); });
 sortByEl.addEventListener('change', () => { visibleCount = PAGE_SIZE; render(); });
+exportBtn.addEventListener('click', exportList);
 loadMoreBtn.addEventListener('click', () => { visibleCount += PAGE_SIZE; render(); });
 
 function autoGeolocate() {
